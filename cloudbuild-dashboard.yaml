@@ -1,0 +1,30 @@
+steps:
+  # Step 0: Build the image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/vocaai-491503/voca-dashboard', '.']
+
+  # Step 1: Push the image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/vocaai-491503/voca-dashboard']
+
+  # Step 2: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:latest'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'voca-dashboard'
+      - '--image'
+      - 'gcr.io/vocaai-491503/voca-dashboard'
+      - '--region'
+      - 'asia-south1'
+      - '--port'
+      - '8080'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'PROJECT_ID=vocaai-491503,MODEL=gemini-2.5-flash'
+      - '--set-secrets'
+      - '/secrets/service_account.json=voca-service-account:latest'
+
+images:
+  - 'gcr.io/vocaai-491503/voca-dashboard'

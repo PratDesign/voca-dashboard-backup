@@ -1,0 +1,14 @@
+# Security
+service_account.json
+.env
+*.json
+secrets/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Cloud
+.gcloud/
