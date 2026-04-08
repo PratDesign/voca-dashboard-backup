@@ -22,7 +22,7 @@ steps:
       - '8080'
       - '--allow-unauthenticated'
       - '--set-env-vars'
-      - 'PROJECT_ID=vocaai-491503,MODEL=gemini-2.5-flash'
+      - 'PROJECT_ID=vocaai-491503,MODEL=gemini-2.5-flash,GOOGLE_GENAI_USE_VERTEXAI=true'
       - '--set-secrets'
       - '/secrets/service_account.json=voca-service-account:latest'
 
