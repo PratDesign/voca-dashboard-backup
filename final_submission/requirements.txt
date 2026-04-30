@@ -1,0 +1,23 @@
+# Core ADK + MCP
+google-adk==1.14.0
+fastmcp==0.4.1
+uvicorn
+starlette
+sse-starlette
+
+# Google Cloud
+google-cloud-firestore
+
+# Google Calendar (OAuth2 user credentials flow)
+google-api-python-client>=2.157.0
+google-auth-httplib2
+google-auth-oauthlib        # NEW — required for InstalledAppFlow in server.py
+
+# Environment
+python-dotenv==1.0.1
+
+# Parent dashboard
+streamlit
+pandas
+plotly
+pytz

@@ -1,0 +1,29 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/harrypottervoca/voca-dashboard', '.']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/harrypottervoca/voca-dashboard']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:latest'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'voca-hub-final'
+      - '--image'
+      - 'gcr.io/harrypottervoca/voca-dashboard'
+      - '--region'
+      - 'us-east1'
+      - '--port'
+      - '8080'
+      - '--allow-unauthenticated'
+      - '--service-account'
+      - 'test-74@harrypottervoca.iam.gserviceaccount.com'
+      - '--set-env-vars'
+      - 'PROJECT_ID=harrypottervoca,MODEL=gemini-2.5-flash,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=us-central1,GOOGLE_CLOUD_PROJECT=harrypottervoca'
+      - '--set-secrets'
+      - '/app/secrets/service_account.json=SERVICE_ACCOUNT_KEY:latest,/app/secrets/token/token.json=GMAIL_TOKEN:latest,/app/secrets/client/client_secrets.json=GMAIL_CLIENT_SECRETS:latest'
+
+images:
+  - 'gcr.io/harrypottervoca/voca-dashboard'
