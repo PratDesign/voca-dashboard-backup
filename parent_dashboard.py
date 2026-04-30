@@ -122,15 +122,19 @@ if "mcp_started" not in st.session_state:
 
 
 # ── ADK RUNNER ────────────────────────────────────────────────────────────────
-@st.cache_resource
+_runner_instance = None
+
 def get_voca_runner() -> Runner:
-    """Build runner synchronously — no async needed for construction."""
-    from my_agent_logic.agent import root_agent
-    return Runner(
-        agent=root_agent,
-        app_name="voca_tutor",
-        session_service=InMemorySessionService(),
-    )
+    """Module-level singleton — no Streamlit context needed."""
+    global _runner_instance
+    if _runner_instance is None:
+        from my_agent_logic.agent import root_agent
+        _runner_instance = Runner(
+            agent=root_agent,
+            app_name="voca_tutor",
+            session_service=InMemorySessionService(),
+        )
+    return _runner_instance
 
 
 async def ask_voca(word: str, session_id: str) -> str:
