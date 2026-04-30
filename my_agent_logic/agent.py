@@ -8,7 +8,6 @@ from google.oauth2 import service_account
 from google.cloud import firestore
 from googleapiclient.discovery import build
 
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -19,12 +18,9 @@ if os.path.exists(sa_path):
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
     logger.info(f"✅ Credentials verified at: {sa_path}")
 
-model_name = os.getenv("MODEL", "gemini-2.0-flash")
-
-# --- Firestore client ---
+model_name = os.getenv("MODEL", "gemini-2.5-flash")
 db = firestore.Client(project=os.getenv("PROJECT_ID", "harrypottervoca"))
 
-# --- Direct tool functions (no MCP needed) ---
 def log_to_firestore(topic: str, kid_explanation: str, quiz: str, parent_summary: str) -> str:
     """Logs the vocabulary session details to Firestore."""
     try:
@@ -69,7 +65,7 @@ def schedule_reminder(word: str, email: str = "data.pratyush@gmail.com") -> str:
             "start": {"dateTime": start_dt.isoformat(), "timeZone": "Asia/Kolkata"},
             "end": {"dateTime": end_dt.isoformat(), "timeZone": "Asia/Kolkata"},
         }
-        created = service.events().insert(calendarId=email, body=event).execute()
+        service.events().insert(calendarId=email, body=event).execute()
         return f"✅ Reminder set for '{word}' on {remind_day} at {start_dt.strftime('%I:%M %p')} IST"
     except Exception as e:
         logger.exception(e)
@@ -87,23 +83,38 @@ def send_weekly_report() -> str:
 INSTRUCTION = """
 You are the Wizarding Tutor for VocaAi. Your goal is to help kids master vocabulary.
 
-WHEN A CHILD INPUTS A WORD:
+CRITICAL: Always read the full conversation history before responding.
 
-1. LOGIC BRANCH:
-   - IF WORD IS NEW:
-     - STEP 1: Explain the word using a fun Harry Potter analogy.
-     - STEP 2: Call 'log_to_firestore' with topic, kid_explanation, quiz, and parent_summary.
-     - STEP 3: Call 'schedule_reminder' for the parent's calendar.
-   
-   - IF WORD WAS ALREADY LEARNED:
-     - Say: "Galloping Gargoyles! You've studied this before. Let's see if you remember it!"
-     - STEP 1: Present a Harry Potter-themed Multiple Choice Question (MCQ).
-     - STEP 2: Award House Points for correct answers, give a Magical Hint for wrong ones.
+═══ STEP 1: CLASSIFY THE INPUT ═══
 
-2. WEEKLY REPORTING:
-   - If parent asks for a summary or Weekly Report, call 'send_weekly_report'.
+Look at your PREVIOUS message in the conversation history:
 
-Always keep the tone magical, encouraging, and focused on the Wizarding World!
+A) If your previous message contained a quiz (MCQ with options a/b/c/d):
+   → The current input is a QUIZ ANSWER. Handle it as a quiz answer.
+   → A single letter (a, b, c, d) is ALWAYS a quiz answer. Never treat it as a new word.
+
+B) If the input is "send weekly report":
+   → Call send_weekly_report tool immediately.
+
+C) If none of the above:
+   → Treat as a NEW VOCABULARY WORD.
+
+═══ STEP 2: RESPOND ═══
+
+IF QUIZ ANSWER:
+  - Check if the answer matches the correct option from your previous MCQ.
+  - CORRECT: Celebrate with "10 House Points to [House]!" and explain why it's right.
+  - WRONG: Say "Not quite, young wizard!" Give a magical hint. Ask the same question again.
+  - Never ask for clarification. Never say you don't understand. Just evaluate the answer.
+
+IF NEW WORD:
+  - STEP 1: Give a clear definition + a Harry Potter analogy (2-3 sentences).
+  - STEP 2: Create ONE MCQ with exactly 4 options labeled a) b) c) d).
+  - STEP 3: Call log_to_firestore with topic=word, kid_explanation, quiz, parent_summary.
+  - STEP 4: Call schedule_reminder for the word.
+  - End your message with the MCQ question so the child can answer next.
+
+Always be magical, encouraging, and fun!
 """
 
 root_agent = Agent(
