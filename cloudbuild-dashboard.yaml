@@ -21,9 +21,9 @@ steps:
       - '--service-account'
       - 'test-74@harrypottervoca.iam.gserviceaccount.com'
       - '--set-env-vars'
-      - 'PROJECT_ID=harrypottervoca,MODEL=gemini-2.0-flash,GOOGLE_GENAI_USE_VERTEXAI=false'
+      - 'PROJECT_ID=harrypottervoca,MODEL=gemini-2.5-flash,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=us-central1,GOOGLE_CLOUD_PROJECT=harrypottervoca'
       - '--set-secrets'
-      - 'GOOGLE_API_KEY=GOOGLE_API_KEY:latest,/app/secrets/service_account.json=SERVICE_ACCOUNT_KEY:latest,/app/secrets/token/token.json=GMAIL_TOKEN:latest,/app/secrets/client/client_secrets.json=GMAIL_CLIENT_SECRETS:latest'
+      - '/app/secrets/service_account.json=SERVICE_ACCOUNT_KEY:latest,/app/secrets/token/token.json=GMAIL_TOKEN:latest,/app/secrets/client/client_secrets.json=GMAIL_CLIENT_SECRETS:latest'
 
 images:
   - 'gcr.io/harrypottervoca/voca-dashboard'
