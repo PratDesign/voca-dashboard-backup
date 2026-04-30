@@ -87,7 +87,7 @@ _loop_thread.start()
 def run_async(coro) -> object:
     """Submit a coroutine to the persistent background loop and block until done."""
     future = asyncio.run_coroutine_threadsafe(coro, _loop)
-    return future.result(timeout=60)
+    return future.result(timeout=300)
 
 
 # ── MCP SERVER ─────────────────────────────────────────────────────────────────
@@ -124,16 +124,13 @@ if "mcp_started" not in st.session_state:
 # ── ADK RUNNER ────────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_voca_runner() -> Runner:
-    """Build the Runner inside the dedicated loop so its MCP session lives
-    in the same event loop it will always be called from."""
-    async def _build() -> Runner:
-        from my_agent_logic.agent import root_agent
-        return Runner(
-            agent=root_agent,
-            app_name="voca_tutor",
-            session_service=InMemorySessionService(),
-        )
-    return run_async(_build())
+    """Build runner synchronously — no async needed for construction."""
+    from my_agent_logic.agent import root_agent
+    return Runner(
+        agent=root_agent,
+        app_name="voca_tutor",
+        session_service=InMemorySessionService(),
+    )
 
 
 async def ask_voca(word: str, session_id: str) -> str:

@@ -7,7 +7,7 @@ from google.adk.agents import Agent
 from google.oauth2 import service_account
 from google.cloud import firestore
 from googleapiclient.discovery import build
-from google.adk.tools import FunctionTool
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
