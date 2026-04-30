@@ -212,27 +212,25 @@ tab1, tab2 = st.tabs(["✨ Student Portal", "📈 Parent Dashboard"])
 with tab1:
     st.subheader("Vocabulary Training Room")
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            if msg["role"] == "assistant" and (
-                "Mastery Check" in msg["content"] or "?" in msg["content"]
-            ):
-                st.info(msg["content"])
-            else:
+    # Chat container — all messages render here, above the input
+    chat_container = st.container()
+    with chat_container:
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
+    # Input always anchored at bottom by Streamlit's st.chat_input
     if word := st.chat_input("Enter a vocabulary word (or answer a quiz!)..."):
         st.session_state.messages.append({"role": "user", "content": word})
-        with st.chat_message("user"):
-            st.markdown(word)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Consulting the Sorting Hat..."):
-                answer = run_async(ask_voca(word, st.session_state.session_id))
-                if "Mastery Check" in answer or "?" in answer:
-                    st.info(answer)
-                else:
-                    st.markdown(answer)
+        # Re-render all messages including new user message
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(word)
+            with st.chat_message("assistant"):
+                with st.spinner("🔮 Consulting the Sorting Hat..."):
+                    answer = run_async(ask_voca(word, st.session_state.session_id))
+                st.markdown(answer)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
