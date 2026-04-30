@@ -377,7 +377,8 @@ with tab2:
                     )
                     apply_chart_theme(fig_topics, "Top topics")
                     fig_topics.update_layout(
-                        yaxis=dict(categoryorder="total ascending", showgrid=False)
+                        yaxis=dict(categoryorder="total ascending", showgrid=False),
+                        xaxis=dict(tickmode="linear", tick0=0, dtick=1)
                     )
                     st.plotly_chart(fig_topics, use_container_width=True)
 
