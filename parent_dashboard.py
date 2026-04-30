@@ -220,33 +220,73 @@ with tab1:
                 st.markdown(msg["content"])
 
     if word := st.chat_input("Enter a vocabulary word (or answer a quiz!)..."):
+        import re, datetime
         st.session_state.messages.append({"role": "user", "content": word})
+        user_answer = word.strip().lower()
+        session_id = st.session_state.session_id
 
-        # If a quiz is active, inject context so agent cannot hallucinate
-        if st.session_state.get("quiz_active") and word.strip().lower() in ["a","b","c","d"]:
-            injected = (
-                f"The student answered '{word.strip().lower()}'. "
-                f"The word being tested is '{st.session_state.quiz_word}'. "
-                f"The correct answer is '{st.session_state.quiz_answer}'. "
-                f"Evaluate if the student is correct or wrong based only on this word."
+        def save_quiz(sid, quiz_word, options, correct):
+            db.collection("active_quiz").document(sid).set({
+                "quiz_word": quiz_word,
+                "options": options,
+                "correct_answer": correct,
+                "ts": datetime.datetime.utcnow()
+            })
+
+        def get_quiz(sid):
+            doc = db.collection("active_quiz").document(sid).get()
+            return doc.to_dict() if doc.exists else None
+
+        def clear_quiz(sid):
+            db.collection("active_quiz").document(sid).delete()
+
+        def parse_quiz(text):
+            wm = re.search(r"describes\s+([a-zA-Z]+)\?", text, re.IGNORECASE)
+            om = re.findall(r"([a-d])\)\s+(.+?)(?=\n[a-d]\)|\nType|$)", text, re.IGNORECASE | re.DOTALL)
+            if wm and len(om) >= 4:
+                return {"quiz_word": wm.group(1), "options": {o[0].lower(): o[1].strip() for o in om}, "correct_answer": "b"}
+            return None
+
+        quiz_state = get_quiz(session_id)
+
+        if quiz_state and user_answer in ["a", "b", "c", "d"]:
+            quiz_word = quiz_state["quiz_word"]
+            correct = quiz_state["correct_answer"]
+            options = quiz_state["options"]
+            verdict = "CORRECT" if user_answer == correct else "WRONG"
+            verified_prompt = (
+                f"QUIZ RESULT — use only this information, do not use your own memory:\n"
+                f"Word tested: {quiz_word}\n"
+                f"Student answered: {user_answer}) {options.get(user_answer, '')}\n"
+                f"Correct answer: {correct}) {options.get(correct, '')}\n"
+                f"Verdict: {verdict}\n"
+                f"Respond in character as the Wizarding Tutor for the word {quiz_word} only."
             )
-            prompt = injected
-        else:
-            prompt = word
+            clear_quiz(session_id)
             st.session_state.quiz_active = False
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(word)
+                with st.chat_message("assistant"):
+                    with st.spinner("🔮 Consulting the Sorting Hat..."):
+                        answer = run_async(ask_voca(verified_prompt, session_id))
+                    st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
 
-        with chat_container:
-            with st.chat_message("user"):
-                st.markdown(word)
-            with st.chat_message("assistant"):
-                with st.spinner("🔮 Consulting the Sorting Hat..."):
-                    answer = run_async(ask_voca(prompt, st.session_state.session_id))
-                st.markdown(answer)
-
-        # Track quiz state simply
-        if any(emoji in answer for emoji in ["🅐", "🅑", "🅒", "🅓"]):
-            st.session_state.quiz_active = True
         else:
+            clear_quiz(session_id)
             st.session_state.quiz_active = False
-
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(word)
+                with st.chat_message("assistant"):
+                    with st.spinner("🔮 Consulting the Sorting Hat..."):
+                        answer = run_async(ask_voca(word, session_id))
+                    st.markdown(answer)
+            quiz_data = parse_quiz(answer)
+            if quiz_data:
+                save_quiz(session_id, quiz_data["quiz_word"], quiz_data["options"], quiz_data["correct_answer"])
+                st.session_state.quiz_active = True
+            else:
+                st.session_state.quiz_active = False
+            st.session_state.messages.append({"role": "assistant", "content": answer})
