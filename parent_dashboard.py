@@ -219,222 +219,34 @@ with tab1:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-    # Input always anchored at bottom by Streamlit's st.chat_input
     if word := st.chat_input("Enter a vocabulary word (or answer a quiz!)..."):
         st.session_state.messages.append({"role": "user", "content": word})
 
-        # Re-render all messages including new user message
+        # If a quiz is active, inject context so agent cannot hallucinate
+        if st.session_state.get("quiz_active") and word.strip().lower() in ["a","b","c","d"]:
+            injected = (
+                f"The student answered '{word.strip().lower()}'. "
+                f"The word being tested is '{st.session_state.quiz_word}'. "
+                f"The correct answer is '{st.session_state.quiz_answer}'. "
+                f"Evaluate if the student is correct or wrong based only on this word."
+            )
+            prompt = injected
+        else:
+            prompt = word
+            st.session_state.quiz_active = False
+
         with chat_container:
             with st.chat_message("user"):
                 st.markdown(word)
             with st.chat_message("assistant"):
                 with st.spinner("🔮 Consulting the Sorting Hat..."):
-                    answer = run_async(ask_voca(word, st.session_state.session_id))
+                    answer = run_async(ask_voca(prompt, st.session_state.session_id))
                 st.markdown(answer)
 
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-
-# ── TAB 2: PARENT DASHBOARD ───────────────────────────────────────────────────
-with tab2:
-    st.subheader("Parental Oversight & Insights")
-
-    try:
-        docs = (
-            db.collection("tutor_sessions")
-            .order_by("timestamp", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
-        data = [doc.to_dict() for doc in docs]
-        df = pd.DataFrame(data)
-
-        if not df.empty:
-
-            # ── Normalise timestamps ──────────────────────────────────
-            if "timestamp" in df.columns:
-                df["ts"] = pd.to_datetime(df["timestamp"])
-                df["date"] = df["ts"].dt.date
-                df["Learned Date"] = df["ts"].dt.strftime("%b %d, %Y  %H:%M")
-
-            # ── Streak ────────────────────────────────────────────────
-            streak = compute_streak(df["date"].tolist() if "date" in df.columns else [])
-
-            # ── Metrics row ───────────────────────────────────────────
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric(
-                "Words Learned",
-                len(df),
-                delta=(
-                    f"+{len(df[df['date'] >= date.today() - timedelta(days=7)])}"
-                    if "date" in df.columns else None
-                ),
-                delta_color="normal",
-                help="Total vocabulary entries recorded",
-            )
-            m2.metric(
-                "Topics Covered",
-                df["topic"].nunique() if "topic" in df.columns else "—",
-                help="Distinct topics studied",
-            )
-            m3.metric(
-                "Study Streak",
-                f"{streak} days",
-                help="Consecutive days with at least one word learned",
-            )
-            if (
-                "correct" in df.columns
-                and "attempted" in df.columns
-                and df["attempted"].sum() > 0
-            ):
-                accuracy = round(df["correct"].sum() / df["attempted"].sum() * 100)
-                m4.metric("Quiz Accuracy", f"{accuracy}%",
-                          help="Correct answers across all quizzes")
-            else:
-                unique_days = df["date"].nunique() if "date" in df.columns else "—"
-                m4.metric("Days Active", unique_days,
-                          help="Total days with study activity")
-
-            st.divider()
-
-            # ── Filters ───────────────────────────────────────────────
-            col_search, col_topic, col_date = st.columns([3, 2, 2])
-
-            with col_search:
-                search_term = st.text_input(
-                    "Search",
-                    placeholder="Search word or topic...",
-                    label_visibility="collapsed",
-                )
-            with col_topic:
-                topic_options = ["All topics"]
-                if "topic" in df.columns:
-                    topic_options += sorted(df["topic"].dropna().unique().tolist())
-                selected_topic = st.selectbox(
-                    "Filter by topic", topic_options, label_visibility="collapsed"
-                )
-            with col_date:
-                date_filter = st.selectbox(
-                    "Date range",
-                    ["All time", "Last 7 days", "Last 30 days"],
-                    label_visibility="collapsed",
-                )
-
-            # Apply filters to a copy — charts always show full data
-            fdf = df.copy()
-            if search_term:
-                mask = pd.Series(False, index=fdf.index)
-                for col in ["topic", "word", "parent_summary"]:
-                    if col in fdf.columns:
-                        mask |= fdf[col].astype(str).str.contains(
-                            search_term, case=False, na=False
-                        )
-                fdf = fdf[mask]
-            if selected_topic != "All topics" and "topic" in fdf.columns:
-                fdf = fdf[fdf["topic"] == selected_topic]
-            if date_filter != "All time" and "date" in fdf.columns:
-                days_back = 7 if "7" in date_filter else 30
-                cutoff = date.today() - timedelta(days=days_back)
-                fdf = fdf[fdf["date"] >= cutoff]
-
-            # ── Charts (always full df, not filtered) ─────────────────
-            chart_col, topic_col = st.columns([3, 2])
-
-            with chart_col:
-                if "date" in df.columns:
-                    activity = (
-                        df.groupby("date").size().reset_index(name="Words")
-                    )
-                    activity["date"] = pd.to_datetime(activity["date"])
-                    activity = activity.sort_values("date").tail(30)
-                    fig_activity = px.bar(
-                        activity, x="date", y="Words",
-                        labels={"date": "", "Words": "Words learned"},
-                    )
-                    fig_activity.update_traces(
-                        marker_color="#185FA5",
-                        marker_line_width=0,
-                        hovertemplate="%{x|%b %d}<br>%{y} words<extra></extra>",
-                    )
-                    apply_chart_theme(fig_activity, "Daily learning activity — last 30 days")
-                    st.plotly_chart(fig_activity, use_container_width=True)
-
-            with topic_col:
-                if "topic" in df.columns:
-                    topic_counts = (
-                        df["topic"].value_counts().head(8).reset_index()
-                    )
-                    topic_counts.columns = ["Topic", "Count"]
-                    fig_topics = px.bar(
-                        topic_counts, x="Count", y="Topic",
-                        orientation="h",
-                        labels={"Count": "Words", "Topic": ""},
-                    )
-                    fig_topics.update_traces(
-                        marker_color="#3B6D11",
-                        marker_line_width=0,
-                        hovertemplate="%{y}: %{x} words<extra></extra>",
-                    )
-                    apply_chart_theme(fig_topics, "Top topics")
-                    fig_topics.update_layout(
-                        yaxis=dict(categoryorder="total ascending", showgrid=False),
-                        xaxis=dict(tickmode="linear", tick0=0, dtick=1)
-                    )
-                    st.plotly_chart(fig_topics, use_container_width=True)
-
-            st.divider()
-
-            # ── Log header + report button ────────────────────────────
-            log_title_col, report_col = st.columns([5, 1])
-            with log_title_col:
-                st.markdown("#### 📜 Vocabulary Log")
-                st.caption(f"{len(fdf)} entr{'y' if len(fdf) == 1 else 'ies'} shown")
-            with report_col:
-                st.write("")  # nudge vertical alignment
-                if st.button("📩 Send Report", use_container_width=True):
-                    with st.spinner("Sending..."):
-                        run_async(
-                            ask_voca("send weekly report", st.session_state.session_id)
-                        )
-                    st.success("Report sent!", icon="✅")
-
-            # ── Vocabulary log table ──────────────────────────────────
-            display_col_candidates = [
-                "Learned Date", "word", "topic", "parent_summary", "mastery_level"
-            ]
-            display_cols = [c for c in display_col_candidates if c in fdf.columns]
-
-            if display_cols:
-                rename_map = {
-                    "word": "Word",
-                    "topic": "Topic",
-                    "parent_summary": "Summary",
-                    "mastery_level": "Mastery %",
-                }
-                display_df = fdf[display_cols].rename(columns=rename_map).head(25)
-
-                column_config = {
-                    "Summary": st.column_config.TextColumn("Summary", width="large"),
-                }
-                if "Mastery %" in display_df.columns:
-                    column_config["Mastery %"] = st.column_config.ProgressColumn(
-                        "Mastery",
-                        help="How well the student knows this word",
-                        min_value=0,
-                        max_value=100,
-                        format="%d%%",
-                    )
-
-                st.dataframe(
-                    display_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config=column_config,
-                )
-            else:
-                st.info("No matching entries for the current filters.")
-
+        # Track quiz state simply
+        if any(emoji in answer for emoji in ["🅐", "🅑", "🅒", "🅓"]):
+            st.session_state.quiz_active = True
         else:
-            st.warning("No magical entries found in the scrolls yet.")
+            st.session_state.quiz_active = False
 
-    except Exception as e:
-        st.error(f"Sync error: {e}")
-        st.exception(e)  # Remove this line in production
+        st.session_state.messages.append({"role": "assistant", "content": answer})
