@@ -9,6 +9,8 @@ import asyncio
 import uuid
 import threading
 import socket
+import re
+import datetime
 from datetime import date, timedelta
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -68,12 +70,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── FIRESTORE ──────────────────────────────────────────────────────────────────
-PROJECT_ID = os.getenv("PROJECT_ID", "vocaai-491503")
+PROJECT_ID = os.getenv("PROJECT_ID", "harrypottervoca")
 db = firestore.Client(project=PROJECT_ID)
 
 # ── DEDICATED ASYNC EVENT LOOP ─────────────────────────────────────────────────
-# A single persistent loop in a background thread. Avoids asyncio.run()
-# conflicts with Streamlit's own loop and keeps the MCP session alive.
 _loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
 
 def _start_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -91,31 +91,6 @@ def run_async(coro) -> object:
 
 
 # ── MCP SERVER ─────────────────────────────────────────────────────────────────
-def start_mcp_server() -> None:
-    """Start MCP server using absolute paths to avoid Cloud Run directory confusion."""
-    # In your Docker container, this will resolve to /app
-    abs_path = os.path.abspath(os.path.dirname(__file__))
-    server_path = os.path.join(abs_path, "server.py")
-    
-    env = {**os.environ, "PYTHONPATH": abs_path, "PORT": "8001"}
-    
-    # We remove devnull here so if it fails, the error appears in Cloud Run Logs
-    subprocess.Popen(
-        ["python3", server_path],
-        cwd=abs_path,
-        env=env
-    )
-    
-    # Increase to 30 seconds (range 60) because Cloud Run startup can be slow
-    for _ in range(60):  
-        try:
-            with socket.create_connection(("localhost", 8001), timeout=0.5):
-                return
-        except (ConnectionRefusedError, OSError):
-            time.sleep(0.5)
-            
-    raise RuntimeError(f"MCP server failed to start at {server_path} within 30 seconds")
-# Run exactly once per browser session
 if "mcp_started" not in st.session_state:
     pass  # MCP already running via start.sh
     st.session_state.mcp_started = True
@@ -146,7 +121,7 @@ async def ask_voca(word: str, session_id: str) -> str:
             session_id=session_id,
         )
     except Exception:
-        pass  # Session may already exist
+        pass
 
     full_text: list = []
     msg_content = genai_types.Content(
@@ -166,9 +141,36 @@ async def ask_voca(word: str, session_id: str) -> str:
     return "\n\n".join(full_text) if full_text else "The spell fizzled... try again!"
 
 
+# ── QUIZ FIRESTORE HELPERS ─────────────────────────────────────────────────────
+def save_quiz(sid, quiz_word, options, correct):
+    db.collection("active_quiz").document(sid).set({
+        "quiz_word": quiz_word,
+        "options": options,
+        "correct_answer": correct,
+        "ts": datetime.datetime.utcnow()
+    })
+
+def get_quiz(sid):
+    doc = db.collection("active_quiz").document(sid).get()
+    return doc.to_dict() if doc.exists else None
+
+def clear_quiz(sid):
+    db.collection("active_quiz").document(sid).delete()
+
+def parse_quiz(text):
+    wm = re.search(r"describes\s+([a-zA-Z]+)\?", text, re.IGNORECASE)
+    om = re.findall(r"([a-d])\)\s+(.+?)(?=\n[a-d]\)|\nType|$)", text, re.IGNORECASE | re.DOTALL)
+    if wm and len(om) >= 4:
+        return {
+            "quiz_word": wm.group(1),
+            "options": {o[0].lower(): o[1].strip() for o in om},
+            "correct_answer": "b"
+        }
+    return None
+
+
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def compute_streak(study_dates: list) -> int:
-    """Return the number of consecutive days (including today) with activity."""
     if not study_dates:
         return 0
     sorted_days = sorted(set(study_dates), reverse=True)
@@ -184,7 +186,6 @@ def compute_streak(study_dates: list) -> int:
 
 
 def apply_chart_theme(fig, title: str):
-    """Apply consistent dark-theme styling to a Plotly figure."""
     fig.update_layout(
         title=dict(text=title, font=dict(size=13, color="#aaaaaa")),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -202,6 +203,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
+if "quiz_active" not in st.session_state:
+    st.session_state.quiz_active = False
 
 # ── PAGE TITLE ────────────────────────────────────────────────────────────────
 st.title("🧙‍♂️ VocaAi: The Wizarding Academy")
@@ -212,7 +215,6 @@ tab1, tab2 = st.tabs(["✨ Student Portal", "📈 Parent Dashboard"])
 with tab1:
     st.subheader("Vocabulary Training Room")
 
-    # Chat container — all messages render here, above the input
     chat_container = st.container()
     with chat_container:
         for msg in st.session_state.messages:
@@ -220,36 +222,13 @@ with tab1:
                 st.markdown(msg["content"])
 
     if word := st.chat_input("Enter a vocabulary word (or answer a quiz!)..."):
-        import re, datetime
         st.session_state.messages.append({"role": "user", "content": word})
         user_answer = word.strip().lower()
         session_id = st.session_state.session_id
-
-        def save_quiz(sid, quiz_word, options, correct):
-            db.collection("active_quiz").document(sid).set({
-                "quiz_word": quiz_word,
-                "options": options,
-                "correct_answer": correct,
-                "ts": datetime.datetime.utcnow()
-            })
-
-        def get_quiz(sid):
-            doc = db.collection("active_quiz").document(sid).get()
-            return doc.to_dict() if doc.exists else None
-
-        def clear_quiz(sid):
-            db.collection("active_quiz").document(sid).delete()
-
-        def parse_quiz(text):
-            wm = re.search(r"describes\s+([a-zA-Z]+)\?", text, re.IGNORECASE)
-            om = re.findall(r"([a-d])\)\s+(.+?)(?=\n[a-d]\)|\nType|$)", text, re.IGNORECASE | re.DOTALL)
-            if wm and len(om) >= 4:
-                return {"quiz_word": wm.group(1), "options": {o[0].lower(): o[1].strip() for o in om}, "correct_answer": "b"}
-            return None
-
         quiz_state = get_quiz(session_id)
 
         if quiz_state and user_answer in ["a", "b", "c", "d"]:
+            # Firestore has the ground truth — agent gets verified context only
             quiz_word = quiz_state["quiz_word"]
             correct = quiz_state["correct_answer"]
             options = quiz_state["options"]
@@ -274,6 +253,7 @@ with tab1:
             st.session_state.messages.append({"role": "assistant", "content": answer})
 
         else:
+            # New word — send to agent
             clear_quiz(session_id)
             st.session_state.quiz_active = False
             with chat_container:
@@ -290,3 +270,200 @@ with tab1:
             else:
                 st.session_state.quiz_active = False
             st.session_state.messages.append({"role": "assistant", "content": answer})
+
+
+# ── TAB 2: PARENT DASHBOARD ───────────────────────────────────────────────────
+with tab2:
+    st.subheader("Parental Oversight & Insights")
+
+    try:
+        docs = (
+            db.collection("tutor_sessions")
+            .order_by("timestamp", direction=firestore.Query.DESCENDING)
+            .stream()
+        )
+        data = [doc.to_dict() for doc in docs]
+        df = pd.DataFrame(data)
+
+        if not df.empty:
+
+            if "timestamp" in df.columns:
+                df["ts"] = pd.to_datetime(df["timestamp"])
+                df["date"] = df["ts"].dt.date
+                df["Learned Date"] = df["ts"].dt.strftime("%b %d, %Y  %H:%M")
+
+            streak = compute_streak(df["date"].tolist() if "date" in df.columns else [])
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                "Words Learned",
+                len(df),
+                delta=(
+                    f"+{len(df[df['date'] >= date.today() - timedelta(days=7)])}"
+                    if "date" in df.columns else None
+                ),
+                delta_color="normal",
+                help="Total vocabulary entries recorded",
+            )
+            m2.metric(
+                "Topics Covered",
+                df["topic"].nunique() if "topic" in df.columns else "—",
+                help="Distinct topics studied",
+            )
+            m3.metric(
+                "Study Streak",
+                f"{streak} days",
+                help="Consecutive days with at least one word learned",
+            )
+            if (
+                "correct" in df.columns
+                and "attempted" in df.columns
+                and df["attempted"].sum() > 0
+            ):
+                accuracy = round(df["correct"].sum() / df["attempted"].sum() * 100)
+                m4.metric("Quiz Accuracy", f"{accuracy}%",
+                          help="Correct answers across all quizzes")
+            else:
+                unique_days = df["date"].nunique() if "date" in df.columns else "—"
+                m4.metric("Days Active", unique_days,
+                          help="Total days with study activity")
+
+            st.divider()
+
+            col_search, col_topic, col_date = st.columns([3, 2, 2])
+
+            with col_search:
+                search_term = st.text_input(
+                    "Search",
+                    placeholder="Search word or topic...",
+                    label_visibility="collapsed",
+                )
+            with col_topic:
+                topic_options = ["All topics"]
+                if "topic" in df.columns:
+                    topic_options += sorted(df["topic"].dropna().unique().tolist())
+                selected_topic = st.selectbox(
+                    "Filter by topic", topic_options, label_visibility="collapsed"
+                )
+            with col_date:
+                date_filter = st.selectbox(
+                    "Date range",
+                    ["All time", "Last 7 days", "Last 30 days"],
+                    label_visibility="collapsed",
+                )
+
+            fdf = df.copy()
+            if search_term:
+                mask = pd.Series(False, index=fdf.index)
+                for col in ["topic", "word", "parent_summary"]:
+                    if col in fdf.columns:
+                        mask |= fdf[col].astype(str).str.contains(
+                            search_term, case=False, na=False
+                        )
+                fdf = fdf[mask]
+            if selected_topic != "All topics" and "topic" in fdf.columns:
+                fdf = fdf[fdf["topic"] == selected_topic]
+            if date_filter != "All time" and "date" in fdf.columns:
+                days_back = 7 if "7" in date_filter else 30
+                cutoff = date.today() - timedelta(days=days_back)
+                fdf = fdf[fdf["date"] >= cutoff]
+
+            chart_col, topic_col = st.columns([3, 2])
+
+            with chart_col:
+                if "date" in df.columns:
+                    activity = (
+                        df.groupby("date").size().reset_index(name="Words")
+                    )
+                    activity["date"] = pd.to_datetime(activity["date"])
+                    activity = activity.sort_values("date").tail(30)
+                    fig_activity = px.bar(
+                        activity, x="date", y="Words",
+                        labels={"date": "", "Words": "Words learned"},
+                    )
+                    fig_activity.update_traces(
+                        marker_color="#185FA5",
+                        marker_line_width=0,
+                        hovertemplate="%{x|%b %d}<br>%{y} words<extra></extra>",
+                    )
+                    apply_chart_theme(fig_activity, "Daily learning activity — last 30 days")
+                    st.plotly_chart(fig_activity, use_container_width=True)
+
+            with topic_col:
+                if "topic" in df.columns:
+                    topic_counts = (
+                        df["topic"].value_counts().head(8).reset_index()
+                    )
+                    topic_counts.columns = ["Topic", "Count"]
+                    fig_topics = px.bar(
+                        topic_counts, x="Count", y="Topic",
+                        orientation="h",
+                        labels={"Count": "Words", "Topic": ""},
+                    )
+                    fig_topics.update_traces(
+                        marker_color="#3B6D11",
+                        marker_line_width=0,
+                        hovertemplate="%{y}: %{x} words<extra></extra>",
+                    )
+                    apply_chart_theme(fig_topics, "Top topics")
+                    fig_topics.update_layout(
+                        yaxis=dict(categoryorder="total ascending", showgrid=False),
+                        xaxis=dict(tickmode="linear", tick0=0, dtick=1)
+                    )
+                    st.plotly_chart(fig_topics, use_container_width=True)
+
+            st.divider()
+
+            log_title_col, report_col = st.columns([5, 1])
+            with log_title_col:
+                st.markdown("#### 📜 Vocabulary Log")
+                st.caption(f"{len(fdf)} entr{'y' if len(fdf) == 1 else 'ies'} shown")
+            with report_col:
+                st.write("")
+                if st.button("📩 Send Report", use_container_width=True):
+                    with st.spinner("Sending..."):
+                        run_async(
+                            ask_voca("send weekly report", st.session_state.session_id)
+                        )
+                    st.success("Report sent!", icon="✅")
+
+            display_col_candidates = [
+                "Learned Date", "word", "topic", "parent_summary", "mastery_level"
+            ]
+            display_cols = [c for c in display_col_candidates if c in fdf.columns]
+
+            if display_cols:
+                rename_map = {
+                    "word": "Word",
+                    "topic": "Topic",
+                    "parent_summary": "Summary",
+                    "mastery_level": "Mastery %",
+                }
+                display_df = fdf[display_cols].rename(columns=rename_map).head(25)
+
+                column_config = {
+                    "Summary": st.column_config.TextColumn("Summary", width="large"),
+                }
+                if "Mastery %" in display_df.columns:
+                    column_config["Mastery %"] = st.column_config.ProgressColumn(
+                        "Mastery",
+                        help="How well the student knows this word",
+                        min_value=0,
+                        max_value=100,
+                        format="%d%%",
+                    )
+
+                st.dataframe(
+                    display_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=column_config,
+                )
+            else:
+                st.info("No matching entries for the current filters.")
+
+        else:
+            st.warning("No magical entries found in the scrolls yet.")
+
+    except Exception as e:
+        st.error(f"Sync error: {e}")
